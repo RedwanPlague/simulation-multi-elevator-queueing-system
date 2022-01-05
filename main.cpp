@@ -9,7 +9,8 @@
 
 using namespace std;
 
-#define all(v) (v).begin(), (v).end()
+#define all(v)   (v).begin(), (v).end()
+#define str(var) (#var)
 
 template <typename T> T sum(const vector<T> &v) {
     T ret = 0;
@@ -64,27 +65,44 @@ struct Statistics {
     double avg_time_in_que, max_time_in_que;
     vector<int> total_stops;
     vector<double> operation_percentage;
-};
 
-ostream &operator<<(ostream &out, const Statistics &stats) {
-    out << fixed << setprecision(0);
-    out << stats.total_customers_served;
-    out << "," << stats.avg_delivery_time;
-    out << "," << stats.max_delivery_time;
-    out << "," << stats.avg_time_in_elevator;
-    out << "," << stats.max_time_in_elevator;
-    out << "," << stats.max_que_len;
-    out << "," << stats.avg_time_in_que;
-    out << "," << stats.max_time_in_que;
-    for (auto &x : stats.total_stops) {
-        out << "," << x;
+    static void print_headers(ostream &out, int N) {
+        out << str(total_customers_served);
+        out << "," << str(avg_delivery_time);
+        out << "," << str(max_delivery_time);
+        out << "," << str(avg_time_in_elevator);
+        out << "," << str(max_time_in_elevator);
+        out << "," << str(max_que_len);
+        out << "," << str(avg_time_in_que);
+        out << "," << str(max_time_in_que);
+        for (int i = 1; i <= N; i++) {
+            out << "," << str(total_stops) << "_" << i;
+        }
+        for (int i = 1; i <= N; i++) {
+            out << "," << str(operation_percentage) << "_" << i;
+        }
+        out << '\n';
     }
-    for (auto &x : stats.operation_percentage) {
-        out << "," << x;
+
+    void print_data(ostream &out) const {
+        out << fixed << setprecision(0);
+        out << total_customers_served;
+        out << "," << avg_delivery_time;
+        out << "," << max_delivery_time;
+        out << "," << avg_time_in_elevator;
+        out << "," << max_time_in_elevator;
+        out << "," << max_que_len;
+        out << "," << avg_time_in_que;
+        out << "," << max_time_in_que;
+        for (auto &x : total_stops) {
+            out << "," << x;
+        }
+        for (auto &x : operation_percentage) {
+            out << "," << x;
+        }
+        out << '\n';
     }
-    out << '\n';
-    return out;
-}
+};
 
 class Simulator {
     Config config;
@@ -353,11 +371,15 @@ int main() {
     Config config("input.txt");
 
     ofstream fout("output.csv");
+
+    Statistics::print_headers(fout, config.elevator_count);
+
     for (int i = 0; i < 10; i++) {
         Simulator simulator(config);
         Statistics stats = simulator.run();
-        fout << stats;
+        stats.print_data(fout);
         cout << "simulation " << i + 1 << " done." << endl;
     }
+
     fout.close();
 }
