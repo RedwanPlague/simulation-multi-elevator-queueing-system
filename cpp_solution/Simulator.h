@@ -1,16 +1,27 @@
+#ifndef SIMULATOR_H
+#define SIMULATOR_H
+
 #include <algorithm>
 #include <chrono>
-#include <fstream>
-#include <iomanip>
-#include <iostream>
 #include <random>
-#include <string>
 #include <vector>
+
+#include "Config.h"
+#include "Statistics.h"
 
 using namespace std;
 
-#define all(v)   (v).begin(), (v).end()
-#define str(var) (#var)
+#define all(v)     (v).begin(), (v).end()
+#define str(var)   (#var)
+#define align(var) setw(sizeof(#var) - 1) << var
+
+default_random_engine arrival_gen, floor_gen, batch_gen;
+
+void set_seed() {
+    arrival_gen.seed(chrono::system_clock::now().time_since_epoch().count());
+    floor_gen.seed(chrono::system_clock::now().time_since_epoch().count());
+    batch_gen.seed(chrono::system_clock::now().time_since_epoch().count());
+}
 
 template <typename T> T sum(const vector<T> &v) {
     T ret = 0;
@@ -37,73 +48,6 @@ int largest_non_zero_index(const vector<int> &v) {
     return -1;
 }
 
-struct Config {
-    int floor_count, elevator_count, batch_size, elevator_capacity;
-    double simulation_termination_time;
-    double elevator_speed;
-    double door_holding_time, door_opening_time, door_closing_time;
-    double embarking_time, disembarking_time;
-    double mean_interarrival_time;
-
-    Config(const string file_name) {
-        ifstream fin(file_name);
-        fin >> simulation_termination_time;
-        fin >> floor_count >> elevator_count >> elevator_capacity >> batch_size;
-        fin >> door_holding_time >> elevator_speed >> door_opening_time >> door_closing_time;
-        fin >> embarking_time >> disembarking_time;
-        fin >> mean_interarrival_time;
-        mean_interarrival_time *= 60;
-        fin.close();
-    }
-};
-
-struct Statistics {
-    int total_customers_served;
-    double avg_delivery_time, max_delivery_time;
-    double avg_time_in_elevator, max_time_in_elevator;
-    int max_que_len;
-    double avg_time_in_que, max_time_in_que;
-    vector<int> total_stops;
-    vector<double> operation_percentage;
-
-    static void print_headers(ostream &out, int N) {
-        out << str(total_customers_served);
-        out << "," << str(avg_delivery_time);
-        out << "," << str(max_delivery_time);
-        out << "," << str(avg_time_in_elevator);
-        out << "," << str(max_time_in_elevator);
-        out << "," << str(max_que_len);
-        out << "," << str(avg_time_in_que);
-        out << "," << str(max_time_in_que);
-        for (int i = 1; i <= N; i++) {
-            out << "," << str(total_stops) << "_" << i;
-        }
-        for (int i = 1; i <= N; i++) {
-            out << "," << str(operation_percentage) << "_" << i;
-        }
-        out << '\n';
-    }
-
-    void print_data(ostream &out) const {
-        out << fixed << setprecision(0);
-        out << total_customers_served;
-        out << "," << avg_delivery_time;
-        out << "," << max_delivery_time;
-        out << "," << avg_time_in_elevator;
-        out << "," << max_time_in_elevator;
-        out << "," << max_que_len;
-        out << "," << avg_time_in_que;
-        out << "," << max_time_in_que;
-        for (auto &x : total_stops) {
-            out << "," << x;
-        }
-        for (auto &x : operation_percentage) {
-            out << "," << x;
-        }
-        out << '\n';
-    }
-};
-
 class Simulator {
     Config config;
 
@@ -129,10 +73,9 @@ class Simulator {
     vector<int> floor;
 
     // random
-    default_random_engine generator;
     exponential_distribution<double> interarrival;
     uniform_int_distribution<int> random_floor;
-    uniform_int_distribution<int> random_batch;
+    binomial_distribution<int> random_batch;
 
   public:
     Simulator(Config config) : config(config) {
@@ -157,11 +100,11 @@ class Simulator {
         elevator.resize(1, 0);
         floor.resize(1, 0);
 
-        generator.seed(chrono::system_clock::now().time_since_epoch().count());
-        /* generator.seed(10); */
+        set_seed();
+
         interarrival = exponential_distribution<double>(config.mean_interarrival_time);
         random_floor = uniform_int_distribution<int>(2, config.floor_count);
-        random_batch = uniform_int_distribution<int>(1, config.batch_size);
+        random_batch = binomial_distribution<int>(config.batch_size - 1, 0.5);
     }
 
     void load_new_customer() {
@@ -170,14 +113,14 @@ class Simulator {
             return;
         }
 
-        int new_cust_count = (config.batch_size == 1 ? 1 : random_batch(generator));
+        int new_cust_count = 1 + random_batch(batch_gen);
 
-        between.push_back(interarrival(generator));
+        between.push_back(interarrival(arrival_gen));
         for (int k = 1; k < new_cust_count; k++) {
             between.push_back(0);
         }
         for (int k = 0; k < new_cust_count; k++) {
-            floor.push_back(random_floor(generator));
+            floor.push_back(random_floor(floor_gen));
             delivery.push_back(0);
             arrive.push_back(0);
             wait.push_back(0);
@@ -367,19 +310,4 @@ class Simulator {
     }
 };
 
-int main() {
-    Config config("input.txt");
-
-    ofstream fout("output.csv");
-
-    Statistics::print_headers(fout, config.elevator_count);
-
-    for (int i = 0; i < 10; i++) {
-        Simulator simulator(config);
-        Statistics stats = simulator.run();
-        stats.print_data(fout);
-        cout << "simulation " << i + 1 << " done." << endl;
-    }
-
-    fout.close();
-}
+#endif // SIMULATOR_H
