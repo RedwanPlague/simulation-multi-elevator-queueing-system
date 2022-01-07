@@ -2,6 +2,7 @@
 #define SIMULATOR_H
 
 #include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <random>
 #include <vector>
@@ -10,6 +11,8 @@
 #include "Statistics.h"
 
 using namespace std;
+
+#define EPS 1e-20
 
 #define all(v)     (v).begin(), (v).end()
 #define str(var)   (#var)
@@ -39,6 +42,8 @@ template <typename T> T sum(const vector<T> &v, int a, int b) {
     return ret;
 }
 
+double divide(int a, int b) { return a / (b + EPS); }
+
 int largest_non_zero_index(const vector<int> &v) {
     for (int i = v.size() - 1; i >= 0; i--) {
         if (v[i] != 0) {
@@ -60,12 +65,12 @@ class Simulator {
     // current time
     double time;
 
-    int quelen, quetotal, queue, quecust, remain, limit, N, Max, R;
+    int quelensum, quelen, quetotal, queue, quecust, remain, limit, N, Max, R;
     double deltime, elevtime, maxque, maxdel, maxelev, startque, quetime;
 
     // per elevator statistics
     vector<double> return_, operate, eldel;
-    vector<int> stop, first, occup;
+    vector<int> stop, first, occup, total_load, max_load_count, load_count;
     vector<vector<int>> selvec, flrvec;
 
     // per customer statistics
@@ -73,12 +78,17 @@ class Simulator {
     vector<int> floor;
 
     // random
-    exponential_distribution<double> interarrival;
+    uniform_real_distribution<double> interarrival;
     uniform_int_distribution<int> random_floor;
     binomial_distribution<int> random_batch;
 
   public:
     Simulator(Config config) : config(config) {
+        i = 0, time = 0;
+
+        quelensum = quelen = quetotal = queue = quecust = remain = limit = N = Max = R = 0;
+        deltime = elevtime = maxque = maxdel = maxelev = startque = quetime = 0;
+
         int E = config.elevator_count;
         int F = config.floor_count;
 
@@ -89,6 +99,9 @@ class Simulator {
         stop.resize(E, 0);
         first.resize(E, 0);
         occup.resize(E, 0);
+        total_load.resize(E, 0);
+        load_count.resize(E, 0);
+        max_load_count.resize(E, 0);
         selvec.resize(E, vector<int>(F + 1, 0));
         flrvec.resize(E, vector<int>(F + 1, 0));
 
@@ -100,11 +113,14 @@ class Simulator {
         elevator.resize(1, 0);
         floor.resize(1, 0);
 
-        set_seed();
-
-        interarrival = exponential_distribution<double>(config.mean_interarrival_time);
+        interarrival = uniform_real_distribution<double>(0, 1);
         random_floor = uniform_int_distribution<int>(2, config.floor_count);
         random_batch = binomial_distribution<int>(config.batch_size - 1, 0.5);
+    }
+
+    void advance_time(double t) {
+        time += t;
+        quelensum += (t * queue);
     }
 
     void load_new_customer() {
@@ -115,7 +131,7 @@ class Simulator {
 
         int new_cust_count = 1 + random_batch(batch_gen);
 
-        between.push_back(interarrival(arrival_gen));
+        between.push_back(-config.mean_interarrival_time * log(interarrival(arrival_gen)));
         for (int k = 1; k < new_cust_count; k++) {
             between.push_back(0);
         }
@@ -161,13 +177,20 @@ class Simulator {
                    ((config.door_opening_time + config.door_closing_time) * sum(selvec[j]));
         return_[j] = time + eldel[j];
         operate[j] += eldel[j];
+        if (return_[j] > config.simulation_termination_time) {
+            operate[j] -= (return_[j] - config.simulation_termination_time);
+        }
+    }
+
+    void use_occup() {
+        total_load[j] += occup[j];
+        load_count[j]++;
+        if (occup[j] == config.elevator_capacity) {
+            max_load_count[j]++;
+        }
     }
 
     Statistics run() {
-        /* step_1: */
-        deltime = elevtime = maxdel = maxelev = quelen = quetime = maxque = quetotal = remain = 0;
-        /* step_2: */
-        i = 0;
         load_new_customer();
         delivery[i] = config.door_holding_time;
         /* step_3: */
@@ -194,7 +217,10 @@ class Simulator {
             occup[j]++;
         step_8:
             load_new_customer();
-            time += between[i];
+            advance_time(between[i]);
+            if (time > config.simulation_termination_time) {
+                goto step_33;
+            }
             delivery[i] = config.door_holding_time;
             /* step_9: */
             for (int k = 0; k < config.elevator_count; k++) {
@@ -212,6 +238,7 @@ class Simulator {
                 goto step_11;
             }
         step_11:
+            use_occup();
             for (int k = first[j]; k <= limit; k++) {
                 do_steps_12_to_16(k);
             }
@@ -225,7 +252,10 @@ class Simulator {
             arrive[i] = time;
         step_20:
             load_new_customer();
-            time += between[i];
+            advance_time(between[i]);
+            if (time > config.simulation_termination_time) {
+                goto step_33;
+            }
             arrive[i] = time;
             queue++;
             /* step_21: */
@@ -246,6 +276,7 @@ class Simulator {
                 R = quecust + (config.elevator_capacity - 1);
                 occup[j] = config.elevator_capacity;
             }
+            use_occup();
             /* step_24: */
             for (int k = quecust; k <= R; k++) {
                 selvec[j][floor[k]] = 1;
@@ -263,7 +294,7 @@ class Simulator {
             /* step_29: */
             for (int k = first[j]; k <= R; k++) {
                 wait[k] = time - arrive[k];
-                delivery[k] = config.door_holding_time + wait[k];
+                delivery[k] = config.door_holding_time + config.embarking_time + wait[k];
             }
             /* step_30: */
             if (remain <= 0) {
@@ -274,36 +305,38 @@ class Simulator {
                 limit = R;
                 for (int k = first[j]; k <= limit; k++) {
                     do_steps_12_to_16(k);
-                    do_step_17();
                 }
+                do_step_17();
                 goto step_31;
             }
         step_31:
+            assert(remain >= 0);
             queue = remain;
             quecust = R + 1;
             startque = arrive[R + 1];
             /* step_32: */
-            if (time <= config.simulation_termination_time) {
-                goto step_20;
-            }
+            goto step_20;
         }
+    step_33:
         Statistics stats;
-        /* step_33: */
-        stats.total_customers_served = i - queue;
-        stats.avg_delivery_time = deltime / stats.total_customers_served;
+        stats.total_customers_served = i - 1 - queue;
+        stats.avg_delivery_time = divide(deltime, stats.total_customers_served);
         stats.max_delivery_time = maxdel;
         /* step_34: */
-        stats.avg_time_in_elevator = sum(elevator, 1, limit) / limit;
+        stats.avg_time_in_elevator = divide(sum(elevator, 1, limit), limit);
         stats.max_time_in_elevator = maxelev;
         /* step_35: */
+        stats.avg_que_len = divide(quelensum, time);
         stats.max_que_len = quelen;
-        stats.avg_time_in_que = quetime / quetotal;
+        stats.avg_time_in_que = divide(quetime, quetotal);
         stats.max_time_in_que = maxque;
         /* step_36: */
         stats.total_stops = stop;
-        stats.operation_percentage = operate;
+        stats.operation_time = operate;
+        stats.max_load_count = max_load_count;
         for (int k = 0; k < config.elevator_count; k++) {
-            stats.operation_percentage[k] /= config.simulation_termination_time;
+            stats.idle_time.push_back(config.simulation_termination_time - operate[k]);
+            stats.avg_load_size.push_back(divide(total_load[k], load_count[k]));
         }
 
         return stats;
